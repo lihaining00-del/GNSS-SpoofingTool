@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { GNSSDataPoint } from '../types';
 import { SpoofingChart, SignalChart, FixStatusChart } from './Charts';
 
@@ -27,25 +27,99 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
   // A7P doesn't have spoofing detection messages, so we shouldn't flag it as safe or alert based on UBX messages
   const isSpoofingSupported = deviceType === 'X20P' || deviceType === 'X5'; 
 
+  // Extract Spoofing Events (Contiguous segments where State >= 2)
+  const spoofingEvents = useMemo(() => {
+    if (!hasData) return [];
+    const events: {start: string, end: string, maxState: number, count: number}[] = [];
+    let current = null;
+
+    data.forEach(d => {
+        // Check for spoofing (State 2=Indicated, 3=Confirmed)
+        const s1 = d.spoofingState || 0;
+        const s2 = d.secSigState || 0;
+        const state = Math.max(s1, s2);
+        
+        if (state >= 2) {
+            if (!current) {
+                current = { start: d.timestamp, end: d.timestamp, maxState: state, count: 1 };
+            } else {
+                current.end = d.timestamp;
+                current.maxState = Math.max(current.maxState, state);
+                current.count++;
+            }
+        } else {
+            if (current) {
+                events.push(current);
+                current = null;
+            }
+        }
+    });
+    if (current) events.push(current);
+    return events;
+  }, [data]);
+
+  const handleExport = () => {
+    if (!hasData) return;
+    const headers = ['Timestamp', 'TimeSec', 'Lat', 'Lon', 'Alt', 'FixQual', 'Sats', 'L1_CN0', 'SpoofState', 'SecSigState'];
+    const csvContent = [
+        headers.join(','),
+        ...data.map(d => [
+            d.timestamp,
+            d.timeSeconds,
+            d.lat || '',
+            d.lon || '',
+            d.alt || '',
+            d.fixQuality,
+            d.satellitesUsed,
+            d.gpsL1Cn0,
+            d.spoofingState,
+            d.secSigState
+        ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `${deviceType}_analysis.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-800/20 rounded-xl border border-slate-700/50 p-4">
       {/* Header Section */}
       <div className="mb-4 flex-none">
         <div className="flex justify-between items-center mb-2">
           <h2 className="text-xl font-bold text-slate-200">{title}</h2>
-          <div className="relative group">
-            <input
-                type="file"
-                accept=".txt,.ubx,.nmea,.log,.sbf"
-                onChange={onUpload}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
-            />
-            <button className="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs text-slate-200 py-1.5 px-3 rounded shadow-sm transition-all flex items-center gap-2 group-hover:border-cyan-500/50">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                {fileName ? 'Change File' : 'Upload'}
-            </button>
+          <div className="flex gap-2">
+             {hasData && (
+                <button 
+                    onClick={handleExport}
+                    className="bg-indigo-600 hover:bg-indigo-500 border border-indigo-400 text-xs text-white py-1.5 px-3 rounded shadow-sm transition-all flex items-center gap-1"
+                    title="Export CSV"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Export
+                </button>
+            )}
+            <div className="relative group">
+                <input
+                    type="file"
+                    accept=".txt,.ubx,.nmea,.log,.sbf"
+                    onChange={onUpload}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                />
+                <button className="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs text-slate-200 py-1.5 px-3 rounded shadow-sm transition-all flex items-center gap-2 group-hover:border-cyan-500/50">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    {fileName ? 'Change' : 'Upload'}
+                </button>
+            </div>
           </div>
         </div>
         
@@ -83,7 +157,7 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
                 </div>
 
                 {/* Charts */}
-                <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 flex flex-col min-h-0 gap-2">
                     <SpoofingChart 
                         data={data} 
                         disabled={!isSpoofingSupported} 
@@ -91,6 +165,37 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
                     />
                     <SignalChart data={data} />
                     <FixStatusChart data={data} />
+
+                    {/* Spoofing Extraction List */}
+                    {spoofingEvents.length > 0 && (
+                        <div className="bg-slate-900/50 rounded border border-red-900/50 overflow-hidden flex-none max-h-32 overflow-y-auto">
+                            <div className="bg-red-900/20 px-3 py-1 text-[10px] font-bold text-red-400 uppercase tracking-wider sticky top-0 backdrop-blur-sm">
+                                Spoofing Detected ({spoofingEvents.length} events)
+                            </div>
+                            <table className="w-full text-xs text-left">
+                                <thead className="text-slate-500 border-b border-slate-800">
+                                    <tr>
+                                        <th className="px-3 py-1">Start</th>
+                                        <th className="px-3 py-1">End</th>
+                                        <th className="px-3 py-1">Level</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800">
+                                    {spoofingEvents.map((evt, idx) => (
+                                        <tr key={idx} className="hover:bg-red-500/5 transition-colors">
+                                            <td className="px-3 py-1 text-slate-300 font-mono">{evt.start}</td>
+                                            <td className="px-3 py-1 text-slate-300 font-mono">{evt.end}</td>
+                                            <td className="px-3 py-1">
+                                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${evt.maxState === 3 ? 'bg-red-500 text-white' : 'bg-orange-500 text-white'}`}>
+                                                    {evt.maxState === 3 ? 'ALERT' : 'WARN'}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
                 </div>
             </div>
         ) : (

@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>u-blox GNSS Forensics</title>
+    <script>
+      // Fix for local dev: Suppress Tailwind CDN warning and polyfill process
+      (function() {
+        const _warn = console.warn;
+        console.warn = function(...args) {
+          if (args[0] && typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
+          _warn.apply(console, args);
+        };
+        if (typeof window.process === 'undefined') {
+          window.process = { env: { API_KEY: '' } };
+        }
+      })();
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       body {
