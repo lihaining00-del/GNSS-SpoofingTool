@@ -1,0 +1,5 @@
+{
+  "name": "u-blox GNSS Forensics",
+  "description": "A specialized tool for analyzing u-blox GNSS logs (NMEA/Binary) to detect spoofing, visualize L1 C/N0 signal strength, and track positioning data.",
+  "requestFramePermissions": []
+}
