@@ -12,6 +12,46 @@ interface DevicePanelProps {
   onUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
+// Visual Deception: Downsampling Logic
+// Reduces 100k+ points to ~2000 points for rendering, but preserves critical spikes.
+const downsampleData = (data: GNSSDataPoint[], targetPoints: number = 2000): GNSSDataPoint[] => {
+    if (data.length <= targetPoints) return data;
+
+    const blockSize = Math.floor(data.length / targetPoints);
+    const result: GNSSDataPoint[] = [];
+
+    for (let i = 0; i < data.length; i += blockSize) {
+        const slice = data.slice(i, i + blockSize);
+        if (slice.length === 0) continue;
+
+        // Base point (take first in block for timestamp/position reference)
+        const base = slice[0];
+
+        // Security Aggregation: Always take the MAXIMUM threat level in the bucket
+        const maxSpoof = Math.max(...slice.map(d => d.spoofingState || 0));
+        const maxSecSig = Math.max(...slice.map(d => d.secSigState || 0));
+        
+        // Signal Aggregation: Average gives a cleaner trend line
+        const avgL1 = slice.reduce((acc, curr) => acc + (curr.gpsL1Cn0 || 0), 0) / slice.length;
+        const avgTop3 = slice.reduce((acc, curr) => acc + (curr.gpsTop3AvgCn0 || 0), 0) / slice.length;
+
+        // Fix Quality: Minimum (Pessimistic) is often safer for analysis, 
+        // or Mode. Here we use the quality of the point that had the Max Spoofing to correlate, 
+        // or simply the min quality to show dropouts. Let's use MIN quality to highlight signal loss.
+        const minFix = Math.min(...slice.map(d => d.fixQuality || 0));
+
+        result.push({
+            ...base,
+            spoofingState: maxSpoof,
+            secSigState: maxSecSig,
+            gpsL1Cn0: parseFloat(avgL1.toFixed(1)),
+            gpsTop3AvgCn0: parseFloat(avgTop3.toFixed(1)),
+            fixQuality: minFix
+        });
+    }
+    return result;
+};
+
 export const DevicePanel: React.FC<DevicePanelProps> = ({
   title,
   deviceType,
@@ -23,11 +63,16 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
 }) => {
   const hasData = data.length > 0;
   
-  // Calculate device-specific stats
-  // A7P doesn't have spoofing detection messages, so we shouldn't flag it as safe or alert based on UBX messages
+  // A7P doesn't have spoofing detection messages
   const isSpoofingSupported = deviceType === 'X20P' || deviceType === 'X5'; 
 
-  // Extract Spoofing Events (Contiguous segments where State >= 2)
+  // 1. Heavy Calculation for Charts: Downsample (Memoized)
+  const chartData = useMemo(() => {
+     return downsampleData(data);
+  }, [data]);
+
+  // 2. Heavy Calculation for Table: Extract Events (Full Resolution)
+  // We use the full `data` here because we want exact start/end times for the log table.
   const spoofingEvents = useMemo(() => {
     if (!hasData) return [];
     const events: {start: string, end: string, maxState: number, count: number}[] = [];
@@ -56,7 +101,7 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
     });
     if (current) events.push(current);
     return events;
-  }, [data]);
+  }, [data, hasData]); // Added hasData to dependency
 
   const handleExport = () => {
     if (!hasData) return;
@@ -146,7 +191,10 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
                     </div>
                      <div className="bg-slate-800 p-2 rounded border border-slate-700">
                         <p className="text-[10px] text-slate-500 uppercase font-bold">Points</p>
-                        <p className="text-sm font-mono text-white">{data.length}</p>
+                        <p className="text-sm font-mono text-white">
+                           {/* Show Total points, but Charts use downsampled */}
+                           {data.length}
+                        </p>
                     </div>
                      <div className="bg-slate-800 p-2 rounded border border-slate-700">
                         <p className="text-[10px] text-slate-500 uppercase font-bold">Msgs</p>
@@ -158,15 +206,16 @@ export const DevicePanel: React.FC<DevicePanelProps> = ({
 
                 {/* Charts */}
                 <div className="flex-1 flex flex-col min-h-0 gap-2">
+                    {/* Pass chartData (Downsampled) to charts */}
                     <SpoofingChart 
-                        data={data} 
+                        data={chartData} 
                         disabled={!isSpoofingSupported} 
                         deviceType={deviceType}
                     />
-                    <SignalChart data={data} />
-                    <FixStatusChart data={data} />
+                    <SignalChart data={chartData} />
+                    <FixStatusChart data={chartData} />
 
-                    {/* Spoofing Extraction List */}
+                    {/* Spoofing Extraction List (Uses full data) */}
                     {spoofingEvents.length > 0 && (
                         <div className="bg-slate-900/50 rounded border border-red-900/50 overflow-hidden flex-none max-h-32 overflow-y-auto">
                             <div className="bg-red-900/20 px-3 py-1 text-[10px] font-bold text-red-400 uppercase tracking-wider sticky top-0 backdrop-blur-sm">
